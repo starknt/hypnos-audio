@@ -9,6 +9,10 @@ use windows::Devices::Enumeration::{
 };
 use windows::Foundation::TypedEventHandler;
 
+const BLUETOOTH_PROTOCOL_GUID: &str = "{E0CBF06C-CD8B-4647-BB8A-263B43F0F974}";
+const DISCONNECT_DEBOUNCE_MS: u64 = 1500;
+const EVENT_CHANNEL_CAPACITY: usize = 8;
+
 pub enum DeviceEvent {
     HeadsetConnected,
     HeadsetDisconnected,
@@ -20,13 +24,14 @@ pub struct BluetoothWatcher {
 
 impl BluetoothWatcher {
     pub fn new() -> Result<(Self, mpsc::Receiver<DeviceEvent>)> {
-        let (tx, rx) = mpsc::channel(8);
+        let (tx, rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
         let tx_added = tx.clone();
         let tx_removed = tx;
 
-        let filter = windows::core::HSTRING::from(
-            "System.Devices.Aep.ProtocolId:=\"{E0CBF06C-CD8B-4647-BB8A-263B43F0F974}\""
-        ); // Bluetooth protocol GUID
+        let filter = windows::core::HSTRING::from(format!(
+            r#"System.Devices.Aep.ProtocolId:="{}""#,
+            BLUETOOTH_PROTOCOL_GUID
+        ));
 
         let watcher = DeviceInformation::CreateWatcherAqsFilter(&filter)?;
 
@@ -36,7 +41,9 @@ impl BluetoothWatcher {
                     if let Ok(name) = info.Name() {
                         tracing::info!(%name, "bluetooth device added");
                     }
-                    let _ = tx_added.try_send(DeviceEvent::HeadsetConnected);
+                    if let Err(e) = tx_added.try_send(DeviceEvent::HeadsetConnected) {
+                        tracing::warn!(error = %e, "dropped bluetooth connect event");
+                    }
                 }
                 Ok(())
             },
@@ -45,7 +52,9 @@ impl BluetoothWatcher {
         watcher.Removed(&TypedEventHandler::new(
             move |_sender: Ref<'_, _>, info: Ref<'_, DeviceInformationUpdate>| {
                 if let Some(_info) = info.as_ref() {
-                    let _ = tx_removed.try_send(DeviceEvent::HeadsetDisconnected);
+                    if let Err(e) = tx_removed.try_send(DeviceEvent::HeadsetDisconnected) {
+                        tracing::warn!(error = %e, "dropped bluetooth disconnect event");
+                    }
                 }
                 Ok(())
             },
@@ -80,23 +89,27 @@ pub async fn run_event_loop(
                     handle.abort();
                     tracing::debug!("cancelled pending disconnect due to reconnect");
                 }
-                if state.is_saved() {
-                    if let Some(saved) = state.take() {
-                        let _ = audio.set_mute(saved.was_muted);
-                        let _ = audio.set_master_volume(saved.volume);
+                if let Some(saved) = state.take_if_saved() {
+                    if let Err(e) = audio.restore_state(saved) {
+                        tracing::error!(error = %e, "failed to restore audio state");
+                    } else {
                         tracing::info!(was_muted = saved.was_muted, volume = saved.volume, "restored audio state");
                     }
                 }
             }
             DeviceEvent::HeadsetDisconnected => {
+                // Abort any previous pending disconnect before starting a new one
+                if let Some(handle) = disconnect_debounce.take() {
+                    handle.abort();
+                    tracing::debug!("aborted previous disconnect debounce");
+                }
+
                 let state = Arc::clone(&state);
                 let audio = Arc::clone(&audio);
                 let handle = tokio::spawn(async move {
-                    sleep(Duration::from_millis(1500)).await;
-                    if let Ok(was_muted) = audio.is_muted() {
-                        if let Ok(volume) = audio.get_master_volume() {
-                            state.save(crate::state::AudioState { was_muted, volume });
-                        }
+                    sleep(Duration::from_millis(DISCONNECT_DEBOUNCE_MS)).await;
+                    if let Ok(snapshot) = audio.get_state() {
+                        state.save(snapshot);
                     }
                     if let Err(e) = audio.set_mute(true) {
                         tracing::error!(error = %e, "failed to mute audio");

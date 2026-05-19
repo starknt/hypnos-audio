@@ -25,12 +25,8 @@ impl StateManager {
         }
     }
 
-    pub fn take(&self) -> Option<AudioState> {
-        let mut saved = self.saved.lock().unwrap();
-        saved.take()
-    }
-
-    pub fn is_saved(&self) -> bool {
-        self.saved.lock().unwrap().is_some()
+    /// Atomically take the saved state if it exists, returning None otherwise.
+    pub fn take_if_saved(&self) -> Option<AudioState> {
+        self.saved.lock().unwrap().take()
     }
 }
