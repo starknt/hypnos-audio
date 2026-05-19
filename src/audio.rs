@@ -11,7 +11,7 @@ pub struct AudioController;
 impl AudioController {
     pub fn new() -> Result<Self> {
         unsafe {
-            CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok();
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok();
         }
         Ok(Self)
     }
