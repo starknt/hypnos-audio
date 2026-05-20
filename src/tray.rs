@@ -1,6 +1,6 @@
 use anyhow::Result;
 use tray_icon::{
-    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     TrayIcon, TrayIconBuilder,
 };
 use winit::application::ApplicationHandler;
@@ -8,9 +8,21 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowId;
 
+use crate::startup;
+
 pub fn run_tray(shutdown_tx: tokio::sync::mpsc::Sender<()>) -> Result<()> {
     let menu = Menu::new();
+
+    let startup_item = CheckMenuItem::new("Launch on startup", true, false, None);
+    match startup::is_enabled() {
+        Ok(enabled) => startup_item.set_checked(enabled),
+        Err(e) => tracing::warn!(error = %e, "failed to read startup registry state"),
+    }
+
     let quit_item = MenuItem::new("Exit", true, None);
+
+    menu.append(&PredefinedMenuItem::separator())?;
+    menu.append(&startup_item)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&quit_item)?;
 
@@ -25,6 +37,7 @@ pub fn run_tray(shutdown_tx: tokio::sync::mpsc::Sender<()>) -> Result<()> {
     let mut app = TrayApp {
         shutdown_tx,
         quit_item_id: quit_item.id().clone(),
+        startup_item,
         _tray_icon: tray_icon,
     };
 
@@ -35,6 +48,7 @@ pub fn run_tray(shutdown_tx: tokio::sync::mpsc::Sender<()>) -> Result<()> {
 struct TrayApp {
     shutdown_tx: tokio::sync::mpsc::Sender<()>,
     quit_item_id: tray_icon::menu::MenuId,
+    startup_item: CheckMenuItem,
     _tray_icon: TrayIcon,
 }
 
@@ -56,6 +70,13 @@ impl ApplicationHandler for TrayApp {
                     tracing::warn!(error = %e, "failed to send shutdown signal");
                 }
                 event_loop.exit();
+            } else if event.id == *self.startup_item.id() {
+                let new_state = self.startup_item.is_checked();
+                if let Err(e) = startup::set_enabled(new_state) {
+                    tracing::error!(error = %e, "failed to update startup registry");
+                } else {
+                    tracing::info!(startup_enabled = new_state, "startup registry updated");
+                }
             }
         }
     }

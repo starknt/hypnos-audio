@@ -1,6 +1,7 @@
 mod audio;
 mod bluetooth;
 mod state;
+mod startup;
 mod tray;
 
 use anyhow::Result;
