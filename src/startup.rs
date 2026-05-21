@@ -21,14 +21,7 @@ pub fn is_enabled() -> Result<bool> {
         )
         .ok()?;
 
-        let result = RegQueryValueExW(
-            hkey,
-            &HSTRING::from(APP_NAME),
-            None,
-            None,
-            None,
-            None,
-        );
+        let result = RegQueryValueExW(hkey, &HSTRING::from(APP_NAME), None, None, None, None);
 
         let _ = RegCloseKey(hkey);
 

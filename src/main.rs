@@ -1,21 +1,36 @@
 mod audio;
 mod bluetooth;
-mod state;
 mod startup;
+mod state;
 mod tray;
+mod updater;
 
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // Velopack MUST be the first thing to run — it may restart the process
+    velopack::VelopackApp::build().run();
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
         .init();
 
     tracing::info!("hypnos-audio starting...");
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
+    // Startup update check (non-blocking)
+    tokio::task::spawn_blocking(|| {
+        if let Err(e) = updater::check_and_apply() {
+            tracing::warn!(error = %e, "startup update check failed");
+        }
+    });
 
     let audio = Arc::new(audio::AudioController::new()?);
     let state = Arc::new(state::StateManager::new());

@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check & Lint
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
+
+      - name: cargo check
+        run: cargo check
+
+  build:
+    name: Build Release
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hypnos-audio-release
+          path: target/release/hypnos-audio.exe

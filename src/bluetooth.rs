@@ -3,14 +3,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
-use windows::core::Ref;
-use windows::Devices::Enumeration::{
-    DeviceInformation, DeviceInformationUpdate, DeviceWatcher,
-};
+use windows::Devices::Enumeration::{DeviceInformation, DeviceInformationUpdate, DeviceWatcher};
 use windows::Foundation::TypedEventHandler;
+use windows::core::Ref;
 
 const BLUETOOTH_PROTOCOL_GUID: &str = "{E0CBF06C-CD8B-4647-BB8A-263B43F0F974}";
-const DISCONNECT_DEBOUNCE_MS: u64 = 1500;
+const DISCONNECT_DEBOUNCE_MS: u64 = 500;
 const EVENT_CHANNEL_CAPACITY: usize = 8;
 
 pub enum DeviceEvent {
@@ -51,10 +49,10 @@ impl BluetoothWatcher {
 
         watcher.Removed(&TypedEventHandler::new(
             move |_sender: Ref<'_, _>, info: Ref<'_, DeviceInformationUpdate>| {
-                if let Some(_info) = info.as_ref() {
-                    if let Err(e) = tx_removed.try_send(DeviceEvent::HeadsetDisconnected) {
-                        tracing::warn!(error = %e, "dropped bluetooth disconnect event");
-                    }
+                if let Some(_info) = info.as_ref()
+                    && let Err(e) = tx_removed.try_send(DeviceEvent::HeadsetDisconnected)
+                {
+                    tracing::warn!(error = %e, "dropped bluetooth disconnect event");
                 }
                 Ok(())
             },
@@ -93,7 +91,11 @@ pub async fn run_event_loop(
                     if let Err(e) = audio.restore_state(saved) {
                         tracing::error!(error = %e, "failed to restore audio state");
                     } else {
-                        tracing::info!(was_muted = saved.was_muted, volume = saved.volume, "restored audio state");
+                        tracing::info!(
+                            was_muted = saved.was_muted,
+                            volume = saved.volume,
+                            "restored audio state"
+                        );
                     }
                 }
             }

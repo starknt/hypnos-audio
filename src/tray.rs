@@ -1,17 +1,19 @@
 use anyhow::Result;
 use tray_icon::{
-    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     TrayIcon, TrayIconBuilder,
+    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowId;
 
-use crate::startup;
+use crate::{startup, updater};
 
 pub fn run_tray(shutdown_tx: tokio::sync::mpsc::Sender<()>) -> Result<()> {
     let menu = Menu::new();
+
+    let update_item = MenuItem::new("Check for updates", true, None);
 
     let startup_item = CheckMenuItem::new("Launch on startup", true, false, None);
     match startup::is_enabled() {
@@ -21,6 +23,7 @@ pub fn run_tray(shutdown_tx: tokio::sync::mpsc::Sender<()>) -> Result<()> {
 
     let quit_item = MenuItem::new("Exit", true, None);
 
+    menu.append(&update_item)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&startup_item)?;
     menu.append(&PredefinedMenuItem::separator())?;
@@ -36,6 +39,7 @@ pub fn run_tray(shutdown_tx: tokio::sync::mpsc::Sender<()>) -> Result<()> {
 
     let mut app = TrayApp {
         shutdown_tx,
+        update_item_id: update_item.id().clone(),
         quit_item_id: quit_item.id().clone(),
         startup_item,
         _tray_icon: tray_icon,
@@ -47,6 +51,7 @@ pub fn run_tray(shutdown_tx: tokio::sync::mpsc::Sender<()>) -> Result<()> {
 
 struct TrayApp {
     shutdown_tx: tokio::sync::mpsc::Sender<()>,
+    update_item_id: tray_icon::menu::MenuId,
     quit_item_id: tray_icon::menu::MenuId,
     startup_item: CheckMenuItem,
     _tray_icon: TrayIcon,
@@ -70,6 +75,12 @@ impl ApplicationHandler for TrayApp {
                     tracing::warn!(error = %e, "failed to send shutdown signal");
                 }
                 event_loop.exit();
+            } else if event.id == self.update_item_id {
+                std::thread::spawn(|| {
+                    if let Err(e) = updater::check_and_apply() {
+                        tracing::error!(error = %e, "manual update check failed");
+                    }
+                });
             } else if event.id == *self.startup_item.id() {
                 let new_state = self.startup_item.is_checked();
                 if let Err(e) = startup::set_enabled(new_state) {

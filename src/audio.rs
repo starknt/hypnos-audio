@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use windows::Win32::Media::Audio::{
-    eConsole, eRender, Endpoints::IAudioEndpointVolume, IMMDeviceEnumerator, MMDeviceEnumerator,
+    Endpoints::IAudioEndpointVolume, IMMDeviceEnumerator, MMDeviceEnumerator, eConsole, eRender,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
+    CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
 };
 
 use crate::state::AudioState;

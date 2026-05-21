@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+  VPK_APP_ID: hypnos-audio
+  VPK_EXE: hypnos-audio.exe
+
+jobs:
+  release:
+    name: Build, Pack & Release
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Install vpk CLI
+        run: dotnet tool update -g vpk
+
+      - name: Pack with Velopack
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          Write-Host "Packing version $version"
+          vpk pack `
+            -u $env:VPK_APP_ID `
+            -v $version `
+            -p target/release `
+            -e $env:VPK_EXE
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: releases/*
+          token: ${{ secrets.GITHUB_TOKEN }}
+          generate_release_notes: true
