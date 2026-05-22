@@ -12,17 +12,13 @@ mod updater;
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing_subscriber::EnvFilter;
-
 fn main() -> Result<()> {
     // Velopack MUST be the first thing to run — it may restart the process
     velopack::VelopackApp::build().run();
 
     ensure_single_instance();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
-        .init();
+    tracing_subscriber::fmt::init();
 
     tracing::info!("hypnos-audio starting...");
 

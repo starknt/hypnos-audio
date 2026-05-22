@@ -4,16 +4,25 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi"] }
 tray-icon = "0.24.0"
 winit = "0.30"
 anyhow = "1"
 windows-core = "0.62"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "ico"] }
 notify-rust = "4"
 velopack = "=0.0.1589-ga2c5a97"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[build-dependencies]
+winresource = "0.1"
 
 [dependencies.windows]
 version = "0.62"
