@@ -14,13 +14,21 @@ pub fn check_and_apply() -> Result<()> {
     let source = sources::GithubSource::new(&repo_url, None, false);
     let um = UpdateManager::new(source, None, None)?;
 
-    if let UpdateCheck::UpdateAvailable(updates) = um.check_for_updates()? {
-        tracing::info!(version = %updates.TargetFullRelease.Version, "update available, downloading");
-        um.download_updates(&updates, None)?;
-        tracing::info!("update downloaded, restarting to apply");
-        um.apply_updates_and_restart(&updates)?;
-    } else {
-        tracing::info!("no updates available");
+    match um.check_for_updates() {
+        Ok(UpdateCheck::UpdateAvailable(updates)) => {
+            tracing::info!(version = %updates.TargetFullRelease.Version, "update available, downloading");
+            crate::notifications::show("Hypnos Audio", "发现新版本，正在下载并安装");
+            um.download_updates(&updates, None)?;
+            tracing::info!("update downloaded, restarting to apply");
+            um.apply_updates_and_restart(&updates)?;
+        }
+        Ok(_) => {
+            tracing::info!("no updates available");
+        }
+        Err(e) => {
+            crate::notifications::show("Hypnos Audio", "更新检查失败，请稍后再试");
+            return Err(e.into());
+        }
     }
 
     Ok(())

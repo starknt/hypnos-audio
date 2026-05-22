@@ -3,11 +3,16 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
-use windows::Devices::Enumeration::{DeviceInformation, DeviceInformationUpdate, DeviceWatcher};
-use windows::Foundation::TypedEventHandler;
-use windows::core::Ref;
+use windows::Win32::Media::Audio::{
+    DEVICE_STATE, DEVICE_STATE_ACTIVE, DEVICE_STATE_NOTPRESENT, DEVICE_STATE_UNPLUGGED,
+    EDataFlow, ERole, EndpointFormFactor, Headphones, Headset, IMMDeviceEnumerator,
+    IMMNotificationClient, MMDeviceEnumerator, PKEY_AudioEndpoint_FormFactor,
+};
+use windows::Win32::System::Com::{
+    CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+};
+use windows::Win32::System::Com::STGM_READ;
 
-const BLUETOOTH_PROTOCOL_GUID: &str = "{E0CBF06C-CD8B-4647-BB8A-263B43F0F974}";
 const DISCONNECT_DEBOUNCE_MS: u64 = 500;
 const EVENT_CHANNEL_CAPACITY: usize = 8;
 
@@ -16,59 +21,166 @@ pub enum DeviceEvent {
     HeadsetDisconnected,
 }
 
+/// Check whether the given audio endpoint is a headphone or headset.
+unsafe fn is_headphone_device(device_id: &windows::core::PCWSTR) -> Result<bool> {
+    let enumerator: IMMDeviceEnumerator =
+        unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)? };
+    let device = unsafe { enumerator.GetDevice(*device_id)? };
+    let store = unsafe { device.OpenPropertyStore(STGM_READ)? };
+    let value = unsafe { store.GetValue(&PKEY_AudioEndpoint_FormFactor)? };
+
+    if value.vt() == windows::Win32::System::Variant::VT_UI4 {
+        let ulval = unsafe { value.Anonymous.Anonymous.Anonymous.ulVal };
+        let form_factor = EndpointFormFactor(ulval as i32);
+        Ok(form_factor == Headphones || form_factor == Headset)
+    } else {
+        Ok(false)
+    }
+}
+
+#[windows::core::implement(IMMNotificationClient)]
+struct AudioDeviceNotificationClient {
+    tx: mpsc::Sender<DeviceEvent>,
+}
+
+impl windows::Win32::Media::Audio::IMMNotificationClient_Impl
+    for AudioDeviceNotificationClient_Impl
+{
+    fn OnDeviceStateChanged(
+        &self,
+        device_id: &windows::core::PCWSTR,
+        new_state: DEVICE_STATE,
+    ) -> windows::core::Result<()> {
+        let is_connect = new_state == DEVICE_STATE_ACTIVE;
+        let is_disconnect =
+            new_state == DEVICE_STATE_NOTPRESENT || new_state == DEVICE_STATE_UNPLUGGED;
+
+        if !is_connect && !is_disconnect {
+            return Ok(());
+        }
+
+        match unsafe { is_headphone_device(device_id) } {
+            Ok(true) => {
+                let event = if is_connect {
+                    DeviceEvent::HeadsetConnected
+                } else {
+                    DeviceEvent::HeadsetDisconnected
+                };
+                if let Err(e) = self.tx.try_send(event) {
+                    tracing::warn!(error = %e, "dropped audio device event");
+                }
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::debug!(error = %e, "failed to check device form factor");
+            }
+        }
+
+        Ok(())
+    }
+
+    fn OnDeviceAdded(
+        &self,
+        _device_id: &windows::core::PCWSTR,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnDeviceRemoved(
+        &self,
+        _device_id: &windows::core::PCWSTR,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnDefaultDeviceChanged(
+        &self,
+        _flow: EDataFlow,
+        _role: ERole,
+        _device_id: &windows::core::PCWSTR,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnPropertyValueChanged(
+        &self,
+        _device_id: &windows::core::PCWSTR,
+        _key: &windows::Win32::Foundation::PROPERTYKEY,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+}
+
 pub struct BluetoothWatcher {
-    watcher: DeviceWatcher,
+    shutdown_tx: std::sync::mpsc::Sender<()>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl BluetoothWatcher {
     pub fn new() -> Result<(Self, mpsc::Receiver<DeviceEvent>)> {
-        let (tx, rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
-        let tx_added = tx.clone();
-        let tx_removed = tx;
+        let (event_tx, event_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+        let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
 
-        let filter = windows::core::HSTRING::from(format!(
-            r#"System.Devices.Aep.ProtocolId:="{}""#,
-            BLUETOOTH_PROTOCOL_GUID
-        ));
+        let thread = std::thread::spawn(move || {
+            let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
 
-        let watcher = DeviceInformation::CreateWatcherAqsFilter(&filter)?;
+            let Ok(enumerator) =
+                (unsafe { CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) })
+            else {
+                tracing::error!("failed to create MMDeviceEnumerator");
+                return;
+            };
 
-        watcher.Added(&TypedEventHandler::new(
-            move |_sender: Ref<'_, _>, info: Ref<'_, DeviceInformation>| {
-                if let Some(info) = info.as_ref() {
-                    if let Ok(name) = info.Name() {
-                        tracing::info!(%name, "bluetooth device added");
-                    }
-                    if let Err(e) = tx_added.try_send(DeviceEvent::HeadsetConnected) {
-                        tracing::warn!(error = %e, "dropped bluetooth connect event");
-                    }
-                }
-                Ok(())
+            let client = AudioDeviceNotificationClient { tx: event_tx };
+            let client_interface: IMMNotificationClient = client.into();
+
+            if let Err(e) =
+                unsafe { enumerator.RegisterEndpointNotificationCallback(&client_interface) }
+            {
+                tracing::error!(error = %e, "failed to register endpoint notification callback");
+                return;
+            }
+
+            tracing::info!("audio endpoint watcher started");
+
+            // Block until shutdown
+            let _ = shutdown_rx.recv();
+
+            if let Err(e) = unsafe {
+                enumerator.UnregisterEndpointNotificationCallback(&client_interface)
+            } {
+                tracing::warn!(error = %e, "failed to unregister endpoint notification callback");
+            }
+
+            tracing::info!("audio endpoint watcher stopped");
+        });
+
+        Ok((
+            Self {
+                shutdown_tx,
+                thread: Some(thread),
             },
-        ))?;
-
-        watcher.Removed(&TypedEventHandler::new(
-            move |_sender: Ref<'_, _>, info: Ref<'_, DeviceInformationUpdate>| {
-                if let Some(_info) = info.as_ref()
-                    && let Err(e) = tx_removed.try_send(DeviceEvent::HeadsetDisconnected)
-                {
-                    tracing::warn!(error = %e, "dropped bluetooth disconnect event");
-                }
-                Ok(())
-            },
-        ))?;
-
-        Ok((Self { watcher }, rx))
+            event_rx,
+        ))
     }
 
     pub fn start(&self) -> Result<()> {
-        self.watcher.Start()?;
+        // Watcher thread is already running and registered; nothing to do.
         Ok(())
     }
 
     pub fn stop(&self) -> Result<()> {
-        self.watcher.Stop()?;
+        let _ = self.shutdown_tx.send(());
         Ok(())
+    }
+}
+
+impl Drop for BluetoothWatcher {
+    fn drop(&mut self) {
+        let _ = self.shutdown_tx.send(());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
@@ -96,6 +208,10 @@ pub async fn run_event_loop(
                             volume = saved.volume,
                             "restored audio state"
                         );
+                        crate::notifications::show(
+                            "Hypnos Audio",
+                            "耳机已连接，音量已恢复",
+                        );
                     }
                 }
             }
@@ -106,17 +222,22 @@ pub async fn run_event_loop(
                     tracing::debug!("aborted previous disconnect debounce");
                 }
 
-                let state = Arc::clone(&state);
+                // 立即保存当前状态（默认设备此时仍是耳机）
+                if let Ok(snapshot) = audio.get_state() {
+                    state.save(snapshot);
+                }
+
                 let audio = Arc::clone(&audio);
                 let handle = tokio::spawn(async move {
                     sleep(Duration::from_millis(DISCONNECT_DEBOUNCE_MS)).await;
-                    if let Ok(snapshot) = audio.get_state() {
-                        state.save(snapshot);
-                    }
                     if let Err(e) = audio.set_mute(true) {
                         tracing::error!(error = %e, "failed to mute audio");
                     } else {
                         tracing::info!("system muted after headset disconnect");
+                        crate::notifications::show(
+                            "Hypnos Audio",
+                            "耳机已断开，系统已静音",
+                        );
                     }
                 });
                 disconnect_debounce = Some(handle.abort_handle());

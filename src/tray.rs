@@ -6,9 +6,18 @@ use tray_icon::{
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ControlFlow, EventLoop};
+use winit::platform::windows::EventLoopBuilderExtWindows;
 use winit::window::WindowId;
 
 use crate::{startup, updater};
+
+fn load_icon() -> anyhow::Result<tray_icon::Icon> {
+    let embedded = include_bytes!("../assets/icon.png");
+    let img = image::load_from_memory(embedded)?.into_rgba8();
+    let (width, height) = img.dimensions();
+    tracing::info!("loaded embedded icon {}x{}", width, height);
+    Ok(tray_icon::Icon::from_rgba(img.into_raw(), width, height)?)
+}
 
 pub fn run_tray(shutdown_tx: tokio::sync::mpsc::Sender<()>) -> Result<()> {
     let menu = Menu::new();
@@ -32,9 +41,10 @@ pub fn run_tray(shutdown_tx: tokio::sync::mpsc::Sender<()>) -> Result<()> {
     let tray_icon = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_tooltip("Hypnos Audio - Bluetooth Auto-Mute")
+        .with_icon(load_icon()?)
         .build()?;
 
-    let event_loop = EventLoop::new()?;
+    let event_loop = EventLoop::builder().with_any_thread(true).build()?;
     event_loop.set_control_flow(ControlFlow::Wait);
 
     let mut app = TrayApp {

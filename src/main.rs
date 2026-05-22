@@ -1,5 +1,9 @@
+// only release builds should hide the console window; debug builds should show it for easier debugging
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod audio;
 mod bluetooth;
+mod notifications;
 mod startup;
 mod state;
 mod tray;
@@ -13,6 +17,8 @@ use tracing_subscriber::EnvFilter;
 fn main() -> Result<()> {
     // Velopack MUST be the first thing to run — it may restart the process
     velopack::VelopackApp::build().run();
+
+    ensure_single_instance();
 
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
@@ -65,4 +71,25 @@ async fn async_main() -> Result<()> {
     let _ = tray_handle.join();
 
     Ok(())
+}
+
+fn ensure_single_instance() {
+    use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
+    use windows::Win32::System::Threading::CreateMutexW;
+
+    unsafe {
+        let name = windows::core::HSTRING::from("Global\\HypnosAudio_SingleInstance");
+        let Ok(handle) = CreateMutexW(None, false, &name) else {
+            std::process::exit(1);
+        };
+
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            let _ = windows::Win32::Foundation::CloseHandle(handle);
+            std::process::exit(0);
+        }
+
+        // Keep the mutex alive for the process lifetime; HANDLE is Copy and has no Drop,
+        // so the handle stays open until the process exits.
+        let _ = handle;
+    }
 }
