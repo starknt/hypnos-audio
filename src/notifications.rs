@@ -2,15 +2,19 @@ use windows::Data::Xml::Dom::XmlDocument;
 use windows::UI::Notifications::ToastNotificationManager;
 
 pub fn show(title: &str, body: &str, tag: Option<&str>) {
+    let icon_xml = icon_xml();
+
     let xml = format!(
         r#"<toast>
   <visual>
-    <binding template="ToastText02">
-      <text id="1">{}</text>
-      <text id="2">{}</text>
+    <binding template="ToastGeneric">
+      {}
+      <text>{}</text>
+      <text>{}</text>
     </binding>
   </visual>
 </toast>"#,
+        icon_xml,
         xml_escape(title),
         xml_escape(body)
     );
@@ -33,7 +37,9 @@ pub fn show(title: &str, body: &str, tag: Option<&str>) {
         let _ = toast.SetTag(&windows::core::HSTRING::from(t));
     }
 
-    let notifier = match ToastNotificationManager::CreateToastNotifierWithId(&windows::core::HSTRING::from("Hypnos Audio")) {
+    let notifier = match ToastNotificationManager::CreateToastNotifierWithId(
+        &windows::core::HSTRING::from("Hypnos Audio"),
+    ) {
         Ok(n) => n,
         Err(_) => return,
     };
@@ -41,9 +47,35 @@ pub fn show(title: &str, body: &str, tag: Option<&str>) {
     let _ = notifier.Show(&toast);
 }
 
+fn icon_xml() -> String {
+    let Some(path) = icon_path() else {
+        return String::new();
+    };
+    format!(
+        r#"<image placement="appLogoOverride" hint-crop="circle" src="{}"/>"#,
+        xml_escape(&path)
+    )
+}
+
+fn icon_path() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+
+    for rel in ["assets/icon.png", "assets/icon.ico", "icon.png"] {
+        let candidate = dir.join(rel);
+        if candidate.exists() {
+            let abs = candidate.canonicalize().unwrap_or(candidate);
+            let path = abs.to_string_lossy().replace("\\", "/");
+            let path = path.strip_prefix("//?/").unwrap_or(&path);
+            return Some("file:///".to_string() + &path);
+        }
+    }
+    None
+}
+
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
-        .replace('"', "&quot;")
+        .replace('\"', "&quot;")
 }
