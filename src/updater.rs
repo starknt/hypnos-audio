@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::Result;
 use velopack::{UpdateCheck, UpdateManager, sources};
 
 pub fn check_and_apply() -> Result<()> {

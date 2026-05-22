@@ -128,6 +128,12 @@ fn main() {
     std::fs::write(png_path, &images[0].1).expect("failed to save PNG");
     println!("PNG saved to {}", png_path.display());
 
+    // Save raw RGBA (64x64 for runtime embedding)
+    let rgba_path = Path::new("assets/icon.rgba");
+    let img_64 = generate_icon(64);
+    std::fs::write(rgba_path, img_64.as_raw()).expect("failed to save RGBA");
+    println!("RGBA saved to {}", rgba_path.display());
+
     // Save ICO
     let ico_path = Path::new("assets/icon.ico");
     let mut ico_file = std::fs::File::create(ico_path).expect("failed to create ICO");

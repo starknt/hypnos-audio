@@ -1,4 +1,3 @@
-use anyhow::Result;
 use tray_icon::{
     TrayIcon, TrayIconBuilder,
     menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
@@ -11,15 +10,13 @@ use winit::window::WindowId;
 
 use crate::{startup, updater};
 
-fn load_icon() -> anyhow::Result<tray_icon::Icon> {
-    let embedded = include_bytes!("../assets/icon.png");
-    let img = image::load_from_memory(embedded)?.into_rgba8();
-    let (width, height) = img.dimensions();
-    tracing::info!("loaded embedded icon {}x{}", width, height);
-    Ok(tray_icon::Icon::from_rgba(img.into_raw(), width, height)?)
+fn load_icon() -> Result<tray_icon::Icon, tray_icon::BadIcon> {
+    const ICON_SIZE: u32 = 64;
+    let raw = include_bytes!("../assets/icon.rgba");
+    tray_icon::Icon::from_rgba(raw.to_vec(), ICON_SIZE, ICON_SIZE)
 }
 
-pub fn run_tray(shutdown_tx: tokio::sync::mpsc::Sender<()>) -> Result<()> {
+pub fn run_tray(shutdown_tx: tokio::sync::mpsc::Sender<()>) -> crate::Result<()> {
     let menu = Menu::new();
 
     let update_item = MenuItem::new("Check for updates", true, None);

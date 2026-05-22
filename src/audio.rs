@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::Result;
 use windows::Win32::Media::Audio::{
     Endpoints::IAudioEndpointVolume, IMMDeviceEnumerator, MMDeviceEnumerator, eConsole, eRender,
 };
@@ -70,17 +70,17 @@ impl AudioController {
     unsafe fn endpoint_volume(&self) -> Result<IAudioEndpointVolume> {
         let enumerator: IMMDeviceEnumerator = unsafe {
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
-                .context("failed to create MMDeviceEnumerator")?
+                .map_err(|e| format!("failed to create MMDeviceEnumerator: {e}"))?
         };
         let device = unsafe {
             enumerator
                 .GetDefaultAudioEndpoint(eRender, eConsole)
-                .context("failed to get default audio endpoint")?
+                .map_err(|e| format!("failed to get default audio endpoint: {e}"))?
         };
         let volume = unsafe {
             device
                 .Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)
-                .context("failed to activate IAudioEndpointVolume")?
+                .map_err(|e| format!("failed to activate IAudioEndpointVolume: {e}"))?
         };
         Ok(volume)
     }

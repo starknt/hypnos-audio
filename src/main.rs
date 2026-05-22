@@ -9,7 +9,9 @@ mod state;
 mod tray;
 mod updater;
 
-use anyhow::Result;
+pub type Error = Box<dyn std::error::Error + Send + Sync>;
+pub type Result<T> = std::result::Result<T, Error>;
+
 use std::sync::Arc;
 use tokio::sync::mpsc;
 fn main() -> Result<()> {
