@@ -47,8 +47,8 @@ pub fn set_enabled(enabled: bool) -> Result<()> {
         .ok()?;
 
         if enabled {
-            let exe_path =
-                std::env::current_exe().map_err(|e| format!("failed to get current executable path: {e}"))?;
+            let exe_path = std::env::current_exe()
+                .map_err(|e| format!("failed to get current executable path: {e}"))?;
             let path_str = exe_path.to_string_lossy();
             let path_wstr = HSTRING::from(path_str.as_ref());
 

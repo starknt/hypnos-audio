@@ -1,8 +1,8 @@
 use std::io::{self, Write};
 use std::path::Path;
 
-use image::codecs::png::PngEncoder;
 use image::ImageEncoder;
+use image::codecs::png::PngEncoder;
 
 fn rounded_rect_sdf(dx: f32, dy: f32, half_w: f32, half_h: f32, corner_r: f32) -> f32 {
     let adx = dx.abs();

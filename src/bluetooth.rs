@@ -5,14 +5,14 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 use windows::Win32::Media::Audio::{
-    DEVICE_STATE, DEVICE_STATE_ACTIVE, DEVICE_STATE_NOTPRESENT, DEVICE_STATE_UNPLUGGED,
-    EDataFlow, ERole, EndpointFormFactor, Headphones, Headset, IMMDeviceEnumerator,
-    IMMNotificationClient, MMDeviceEnumerator, PKEY_AudioEndpoint_FormFactor,
+    DEVICE_STATE, DEVICE_STATE_ACTIVE, DEVICE_STATE_NOTPRESENT, DEVICE_STATE_UNPLUGGED, EDataFlow,
+    ERole, EndpointFormFactor, Headphones, Headset, IMMDeviceEnumerator, IMMNotificationClient,
+    MMDeviceEnumerator, PKEY_AudioEndpoint_FormFactor,
 };
+use windows::Win32::System::Com::STGM_READ;
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
 };
-use windows::Win32::System::Com::STGM_READ;
 
 const DISCONNECT_DEBOUNCE_MS: u64 = 500;
 const EVENT_CHANNEL_CAPACITY: usize = 8;
@@ -80,17 +80,11 @@ impl windows::Win32::Media::Audio::IMMNotificationClient_Impl
         Ok(())
     }
 
-    fn OnDeviceAdded(
-        &self,
-        _device_id: &windows::core::PCWSTR,
-    ) -> windows::core::Result<()> {
+    fn OnDeviceAdded(&self, _device_id: &windows::core::PCWSTR) -> windows::core::Result<()> {
         Ok(())
     }
 
-    fn OnDeviceRemoved(
-        &self,
-        _device_id: &windows::core::PCWSTR,
-    ) -> windows::core::Result<()> {
+    fn OnDeviceRemoved(&self, _device_id: &windows::core::PCWSTR) -> windows::core::Result<()> {
         Ok(())
     }
 
@@ -125,9 +119,9 @@ impl BluetoothWatcher {
         let thread = std::thread::spawn(move || {
             let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
 
-            let Ok(enumerator) =
-                (unsafe { CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) })
-            else {
+            let Ok(enumerator) = (unsafe {
+                CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
+            }) else {
                 tracing::error!("failed to create MMDeviceEnumerator");
                 return;
             };
@@ -147,9 +141,9 @@ impl BluetoothWatcher {
             // Block until shutdown
             let _ = shutdown_rx.recv();
 
-            if let Err(e) = unsafe {
-                enumerator.UnregisterEndpointNotificationCallback(&client_interface)
-            } {
+            if let Err(e) =
+                unsafe { enumerator.UnregisterEndpointNotificationCallback(&client_interface) }
+            {
                 tracing::warn!(error = %e, "failed to unregister endpoint notification callback");
             }
 
