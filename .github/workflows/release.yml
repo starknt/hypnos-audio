@@ -28,6 +28,11 @@ jobs:
       - name: Build release binary
         run: cargo build --release
 
+      - name: Copy assets to release dir
+        run: |
+          New-Item -ItemType Directory -Force -Path target/release/assets
+          Copy-Item -Path assets/* -Destination target/release/assets/ -Recurse -Force
+
       - name: Install .NET SDK
         uses: actions/setup-dotnet@v4
         with:
