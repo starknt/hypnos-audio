@@ -1,7 +1,7 @@
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::UI::Notifications::ToastNotificationManager;
 
-pub fn show(title: &str, body: &str) {
+pub fn show(title: &str, body: &str, tag: Option<&str>) {
     let xml = format!(
         r#"<toast>
   <visual>
@@ -28,6 +28,10 @@ pub fn show(title: &str, body: &str) {
         Ok(t) => t,
         Err(_) => return,
     };
+
+    if let Some(t) = tag {
+        let _ = toast.SetTag(&windows::core::HSTRING::from(t));
+    }
 
     let notifier = match ToastNotificationManager::CreateToastNotifierWithId(&windows::core::HSTRING::from("Hypnos Audio")) {
         Ok(n) => n,

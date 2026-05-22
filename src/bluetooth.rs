@@ -1,5 +1,6 @@
 use crate::Result;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
@@ -190,8 +191,11 @@ pub async fn run_event_loop(
     audio: Arc<crate::audio::AudioController>,
 ) {
     let mut disconnect_debounce: Option<tokio::task::AbortHandle> = None;
+    let event_gen = Arc::new(AtomicU64::new(0));
 
     while let Some(event) = rx.recv().await {
+        let generation = event_gen.fetch_add(1, Ordering::SeqCst);
+
         match event {
             DeviceEvent::HeadsetConnected => {
                 // Cancel any pending disconnect action
@@ -211,6 +215,7 @@ pub async fn run_event_loop(
                         crate::notifications::show(
                             "Hypnos Audio",
                             "耳机已连接，音量已恢复",
+                            Some("headset-connected"),
                         );
                     }
                 }
@@ -228,8 +233,16 @@ pub async fn run_event_loop(
                 }
 
                 let audio = Arc::clone(&audio);
+                let event_gen = Arc::clone(&event_gen);
                 let handle = tokio::spawn(async move {
                     sleep(Duration::from_millis(DISCONNECT_DEBOUNCE_MS)).await;
+
+                    // 如果已有新事件使本次 debounce 失效，直接放弃
+                    if event_gen.load(Ordering::SeqCst) != generation {
+                        tracing::debug!("disconnect debounce stale, skipping mute");
+                        return;
+                    }
+
                     if let Err(e) = audio.set_mute(true) {
                         tracing::error!(error = %e, "failed to mute audio");
                     } else {
@@ -237,6 +250,7 @@ pub async fn run_event_loop(
                         crate::notifications::show(
                             "Hypnos Audio",
                             "耳机已断开，系统已静音",
+                            Some("headset-disconnected"),
                         );
                     }
                 });
