@@ -29,9 +29,9 @@ fn main() -> Result<()> {
 }
 
 async fn async_main() -> Result<()> {
-    // Startup update check (non-blocking)
+    // Startup update check (non-blocking, silent)
     tokio::task::spawn_blocking(|| {
-        if let Err(e) = updater::check_and_apply() {
+        if let Err(e) = updater::check_and_download() {
             tracing::warn!(error = %e, "startup update check failed");
         }
     });

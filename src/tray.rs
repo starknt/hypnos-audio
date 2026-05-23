@@ -84,9 +84,7 @@ impl ApplicationHandler for TrayApp {
                 event_loop.exit();
             } else if event.id == self.update_item_id {
                 std::thread::spawn(|| {
-                    if let Err(e) = updater::check_and_apply() {
-                        tracing::error!(error = %e, "manual update check failed");
-                    }
+                    updater::check_and_download_notify();
                 });
             } else if event.id == *self.startup_item.id() {
                 let new_state = self.startup_item.is_checked();
