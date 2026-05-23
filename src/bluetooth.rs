@@ -73,9 +73,13 @@ impl windows::Win32::Media::Audio::IMMNotificationClient_Impl
             Ok(true) => {
                 let device_id_string = unsafe { device_id.to_string() }.unwrap_or_default();
                 let event = if is_connect {
-                    DeviceEvent::HeadsetConnected { device_id: device_id_string }
+                    DeviceEvent::HeadsetConnected {
+                        device_id: device_id_string,
+                    }
                 } else {
-                    DeviceEvent::HeadsetDisconnected { device_id: device_id_string }
+                    DeviceEvent::HeadsetDisconnected {
+                        device_id: device_id_string,
+                    }
                 };
                 if let Err(e) = self.tx.try_send(event) {
                     tracing::warn!(error = %e, "dropped audio device event");
