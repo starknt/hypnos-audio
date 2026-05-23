@@ -105,7 +105,7 @@ fn write_ico<W: Write>(w: &mut W, images: &[(u32, Vec<u8>)]) -> io::Result<()> {
     }
 
     // Image data (PNG)
-    for &(_, ref data) in images {
+    for (_, data) in images {
         w.write_all(data)?;
     }
 

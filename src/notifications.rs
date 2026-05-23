@@ -67,7 +67,7 @@ fn icon_path() -> Option<String> {
             let abs = candidate.canonicalize().unwrap_or(candidate);
             let path = abs.to_string_lossy().replace("\\", "/");
             let path = path.strip_prefix("//?/").unwrap_or(&path);
-            return Some("file:///".to_string() + &path);
+            return Some("file:///".to_string() + path);
         }
     }
     None

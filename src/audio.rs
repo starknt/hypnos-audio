@@ -44,6 +44,7 @@ impl AudioController {
         })
     }
 
+    #[allow(dead_code)]
     pub fn restore_device_state_by_id(&self, device_id: &str, state: AudioState) -> Result<()> {
         self.with_device_volume(device_id, |volume| {
             unsafe { volume.SetMute(state.was_muted, std::ptr::null())? };
