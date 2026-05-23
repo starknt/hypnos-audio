@@ -6,27 +6,36 @@ use tokio::sync::mpsc;
 use tokio::time::sleep;
 use windows::Win32::Media::Audio::{
     DEVICE_STATE, DEVICE_STATE_ACTIVE, DEVICE_STATE_NOTPRESENT, DEVICE_STATE_UNPLUGGED, EDataFlow,
-    ERole, EndpointFormFactor, Headphones, Headset, IMMDeviceEnumerator, IMMNotificationClient,
-    MMDeviceEnumerator, PKEY_AudioEndpoint_FormFactor,
+    ERole, EndpointFormFactor, Headphones, Headset, IMMDeviceEnumerator, IMMEndpoint,
+    IMMNotificationClient, MMDeviceEnumerator, PKEY_AudioEndpoint_FormFactor, eRender,
 };
 use windows::Win32::System::Com::STGM_READ;
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
 };
+use windows_core::Interface;
 
 const DISCONNECT_DEBOUNCE_MS: u64 = 500;
 const EVENT_CHANNEL_CAPACITY: usize = 8;
 
 pub enum DeviceEvent {
-    HeadsetConnected,
-    HeadsetDisconnected,
+    HeadsetConnected { device_id: String },
+    HeadsetDisconnected { device_id: String },
 }
 
-/// Check whether the given audio endpoint is a headphone or headset.
-unsafe fn is_headphone_device(device_id: &windows::core::PCWSTR) -> Result<bool> {
+/// Check whether the given audio endpoint is a render (playback) headphone or headset.
+unsafe fn is_render_headphone_device(device_id: &windows::core::PCWSTR) -> Result<bool> {
     let enumerator: IMMDeviceEnumerator =
         unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)? };
     let device = unsafe { enumerator.GetDevice(*device_id)? };
+
+    // Check data flow direction — only handle eRender (playback) endpoints.
+    let endpoint: IMMEndpoint = device.cast()?;
+    let data_flow = unsafe { endpoint.GetDataFlow()? };
+    if data_flow != eRender {
+        return Ok(false);
+    }
+
     let store = unsafe { device.OpenPropertyStore(STGM_READ)? };
     let value = unsafe { store.GetValue(&PKEY_AudioEndpoint_FormFactor)? };
 
@@ -60,12 +69,13 @@ impl windows::Win32::Media::Audio::IMMNotificationClient_Impl
             return Ok(());
         }
 
-        match unsafe { is_headphone_device(device_id) } {
+        match unsafe { is_render_headphone_device(device_id) } {
             Ok(true) => {
+                let device_id_string = unsafe { device_id.to_string() }.unwrap_or_default();
                 let event = if is_connect {
-                    DeviceEvent::HeadsetConnected
+                    DeviceEvent::HeadsetConnected { device_id: device_id_string }
                 } else {
-                    DeviceEvent::HeadsetDisconnected
+                    DeviceEvent::HeadsetDisconnected { device_id: device_id_string }
                 };
                 if let Err(e) = self.tx.try_send(event) {
                     tracing::warn!(error = %e, "dropped audio device event");
@@ -191,17 +201,18 @@ pub async fn run_event_loop(
         let generation = event_gen.fetch_add(1, Ordering::SeqCst);
 
         match event {
-            DeviceEvent::HeadsetConnected => {
+            DeviceEvent::HeadsetConnected { device_id } => {
                 // Cancel any pending disconnect action
                 if let Some(handle) = disconnect_debounce.take() {
                     handle.abort();
                     tracing::debug!("cancelled pending disconnect due to reconnect");
                 }
-                if let Some(saved) = state.take_if_saved() {
+                if let Some(saved) = state.take_for_device(&device_id) {
                     if let Err(e) = audio.restore_state(saved) {
                         tracing::error!(error = %e, "failed to restore audio state");
                     } else {
                         tracing::info!(
+                            device_id,
                             was_muted = saved.was_muted,
                             volume = saved.volume,
                             "restored audio state"
@@ -214,16 +225,24 @@ pub async fn run_event_loop(
                     }
                 }
             }
-            DeviceEvent::HeadsetDisconnected => {
+            DeviceEvent::HeadsetDisconnected { device_id } => {
                 // Abort any previous pending disconnect before starting a new one
                 if let Some(handle) = disconnect_debounce.take() {
                     handle.abort();
                     tracing::debug!("aborted previous disconnect debounce");
                 }
 
-                // 立即保存当前状态（默认设备此时仍是耳机）
-                if let Ok(snapshot) = audio.get_state() {
-                    state.save(snapshot);
+                // 尝试保存该特定设备的音量（设备可能仍短暂可访问）
+                match audio.get_device_state_by_id(&device_id) {
+                    Ok(snapshot) => {
+                        state.save_for_device(device_id.clone(), snapshot);
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, device_id, "failed to save device state by id, falling back to default");
+                        if let Ok(snapshot) = audio.get_state() {
+                            state.save_for_device(device_id.clone(), snapshot);
+                        }
+                    }
                 }
 
                 let audio = Arc::clone(&audio);

@@ -33,6 +33,25 @@ impl AudioController {
         Ok(())
     }
 
+    pub fn get_device_state_by_id(&self, device_id: &str) -> Result<AudioState> {
+        self.with_device_volume(device_id, |volume| {
+            let muted = unsafe { volume.GetMute()? };
+            let level = unsafe { volume.GetMasterVolumeLevelScalar()? };
+            Ok(AudioState {
+                was_muted: muted.as_bool(),
+                volume: level,
+            })
+        })
+    }
+
+    pub fn restore_device_state_by_id(&self, device_id: &str, state: AudioState) -> Result<()> {
+        self.with_device_volume(device_id, |volume| {
+            unsafe { volume.SetMute(state.was_muted, std::ptr::null())? };
+            unsafe { volume.SetMasterVolumeLevelScalar(state.volume.clamp(0.0, 1.0), std::ptr::null())? };
+            Ok(())
+        })
+    }
+
     pub fn is_muted(&self) -> Result<bool> {
         self.with_volume(|volume| {
             let muted = unsafe { volume.GetMute()? };
@@ -67,6 +86,15 @@ impl AudioController {
         f(&volume)
     }
 
+    fn with_device_volume<T>(
+        &self,
+        device_id: &str,
+        f: impl FnOnce(&IAudioEndpointVolume) -> Result<T>,
+    ) -> Result<T> {
+        let volume = unsafe { self.device_endpoint_volume(device_id)? };
+        f(&volume)
+    }
+
     unsafe fn endpoint_volume(&self) -> Result<IAudioEndpointVolume> {
         let enumerator: IMMDeviceEnumerator = unsafe {
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
@@ -76,6 +104,26 @@ impl AudioController {
             enumerator
                 .GetDefaultAudioEndpoint(eRender, eConsole)
                 .map_err(|e| format!("failed to get default audio endpoint: {e}"))?
+        };
+        let volume = unsafe {
+            device
+                .Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)
+                .map_err(|e| format!("failed to activate IAudioEndpointVolume: {e}"))?
+        };
+        Ok(volume)
+    }
+
+    unsafe fn device_endpoint_volume(&self, device_id: &str) -> Result<IAudioEndpointVolume> {
+        let enumerator: IMMDeviceEnumerator = unsafe {
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                .map_err(|e| format!("failed to create MMDeviceEnumerator: {e}"))?
+        };
+        let device_id_wide: Vec<u16> = device_id.encode_utf16().chain(std::iter::once(0)).collect();
+        let device_id_pcwstr = windows::core::PCWSTR::from_raw(device_id_wide.as_ptr());
+        let device = unsafe {
+            enumerator
+                .GetDevice(device_id_pcwstr)
+                .map_err(|e| format!("failed to get device by id: {e}"))?
         };
         let volume = unsafe {
             device
