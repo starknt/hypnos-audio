@@ -199,6 +199,7 @@ pub async fn run_event_loop(
     audio: Arc<crate::audio::AudioController>,
 ) {
     let mut disconnect_debounce: Option<tokio::task::AbortHandle> = None;
+    let mut connect_debounce: Option<tokio::task::AbortHandle> = None;
     let event_gen = Arc::new(AtomicU64::new(0));
 
     while let Some(event) = rx.recv().await {
@@ -206,34 +207,104 @@ pub async fn run_event_loop(
 
         match event {
             DeviceEvent::HeadsetConnected { device_id } => {
-                // Cancel any pending disconnect action
+                // Cancel any pending disconnect / connect action
                 if let Some(handle) = disconnect_debounce.take() {
                     handle.abort();
                     tracing::debug!("cancelled pending disconnect due to reconnect");
                 }
+                if let Some(handle) = connect_debounce.take() {
+                    handle.abort();
+                    tracing::debug!("aborted previous connect debounce");
+                }
                 if let Some(saved) = state.take_for_device(&device_id) {
-                    if let Err(e) = audio.restore_state(saved) {
-                        tracing::error!(error = %e, "failed to restore audio state");
-                    } else {
-                        tracing::info!(
-                            device_id,
-                            was_muted = saved.was_muted,
-                            volume = saved.volume,
-                            "restored audio state"
-                        );
+                    let audio = Arc::clone(&audio);
+                    let event_gen = Arc::clone(&event_gen);
+                    let handle = tokio::spawn(async move {
+                        // 等 Windows 完成设备初始化和自动音量恢复后再覆盖
+                        sleep(Duration::from_millis(1200)).await;
+
+                        // 如果已有新事件使本次 debounce 失效，直接放弃
+                        if event_gen.load(Ordering::SeqCst) != generation {
+                            tracing::debug!("connect debounce stale, skipping restore");
+                            return;
+                        }
+
+                        // 先尝试恢复保存的音量，失败或验证不通过时回退到当前系统音量
+                        let restored =
+                            match audio.restore_device_state_by_id(&device_id, saved) {
+                                Ok(()) => {
+                                    // 短暂等待让系统稳定后再验证
+                                    sleep(Duration::from_millis(300)).await;
+                                    match audio.get_device_state_by_id(&device_id) {
+                                        Ok(current)
+                                            if (current.volume - saved.volume).abs()
+                                                <= 0.05 =>
+                                        {
+                                            tracing::info!(
+                                                device_id,
+                                                was_muted = saved.was_muted,
+                                                volume = saved.volume,
+                                                "restored audio state"
+                                            );
+                                            true
+                                        }
+                                        Ok(current) => {
+                                            tracing::warn!(
+                                                expected = saved.volume,
+                                                actual = current.volume,
+                                                "volume mismatch after restore"
+                                            );
+                                            false
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                error = %e,
+                                                "failed to verify restored volume"
+                                            );
+                                            false
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        error = %e,
+                                        "failed to restore audio state"
+                                    );
+                                    false
+                                }
+                            };
+
+                        if !restored {
+                            // 回退：使用当前系统音量
+                            if let Ok(sys) = audio.get_state() {
+                                tracing::info!(
+                                    device_id,
+                                    volume = sys.volume,
+                                    muted = sys.was_muted,
+                                    "falling back to current system volume"
+                                );
+                                let _ = audio.restore_device_state_by_id(&device_id, sys);
+                            }
+                        }
+
                         crate::notifications::show(
                             "Hypnos Audio",
                             "耳机已连接，音量已恢复",
                             Some("headset-connected"),
                         );
-                    }
+                    });
+                    connect_debounce = Some(handle.abort_handle());
                 }
             }
             DeviceEvent::HeadsetDisconnected { device_id } => {
-                // Abort any previous pending disconnect before starting a new one
+                // Abort any previous pending disconnect / connect before starting a new one
                 if let Some(handle) = disconnect_debounce.take() {
                     handle.abort();
                     tracing::debug!("aborted previous disconnect debounce");
+                }
+                if let Some(handle) = connect_debounce.take() {
+                    handle.abort();
+                    tracing::debug!("aborted previous connect debounce");
                 }
 
                 // 尝试保存该特定设备的音量（设备可能仍短暂可访问）
