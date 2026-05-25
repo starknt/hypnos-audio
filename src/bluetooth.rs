@@ -287,7 +287,11 @@ pub async fn run_event_loop(
                                 "restored audio state"
                             );
                         } else {
-                            tracing::warn!(device_id, volume = saved.volume, "all restore attempts failed");
+                            tracing::warn!(
+                                device_id,
+                                volume = saved.volume,
+                                "all restore attempts failed"
+                            );
                         }
 
                         crate::notifications::show(

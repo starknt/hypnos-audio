@@ -8,7 +8,7 @@ use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, MSG, PeekMessageW, TranslateMessage, PM_REMOVE,
+    DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
 };
 
 #[allow(dead_code)]
@@ -120,7 +120,11 @@ impl AudioController {
     pub fn restore_device_state_by_id(&self, device_id: &str, state: AudioState) -> Result<()> {
         let (tx, rx) = mpsc::channel();
         self.tx
-            .send(Command::RestoreDeviceState(device_id.to_string(), state, tx))
+            .send(Command::RestoreDeviceState(
+                device_id.to_string(),
+                state,
+                tx,
+            ))
             .map_err(|e| format!("audio worker disconnected: {e}"))?;
         rx.recv()
             .map_err(|e| format!("audio worker hung up: {e}"))?
@@ -189,9 +193,7 @@ impl AudioController {
 
     fn exec_set_volume(level: f32) -> Result<()> {
         Self::with_volume(|volume| {
-            unsafe {
-                volume.SetMasterVolumeLevelScalar(level.clamp(0.0, 1.0), std::ptr::null())?
-            };
+            unsafe { volume.SetMasterVolumeLevelScalar(level.clamp(0.0, 1.0), std::ptr::null())? };
             Ok(())
         })
     }
