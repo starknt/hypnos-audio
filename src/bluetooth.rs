@@ -221,7 +221,7 @@ pub async fn run_event_loop(
                     let event_gen = Arc::clone(&event_gen);
                     let handle = tokio::spawn(async move {
                         // 等 Windows 完成设备初始化和自动音量恢复后再覆盖
-                        sleep(Duration::from_millis(1200)).await;
+                        sleep(Duration::from_millis(2000)).await;
 
                         // 如果已有新事件使本次 debounce 失效，直接放弃
                         if event_gen.load(Ordering::SeqCst) != generation {
@@ -229,62 +229,65 @@ pub async fn run_event_loop(
                             return;
                         }
 
-                        // 先尝试恢复保存的音量，失败或验证不通过时回退到当前系统音量
-                        let restored =
+                        // 多次尝试恢复保存的音量，应对 Windows/驱动自动覆盖
+                        let mut restored = false;
+                        for attempt in 0..3 {
+                            if event_gen.load(Ordering::SeqCst) != generation {
+                                return;
+                            }
+
                             match audio.restore_device_state_by_id(&device_id, saved) {
                                 Ok(()) => {
-                                    // 短暂等待让系统稳定后再验证
-                                    sleep(Duration::from_millis(300)).await;
-                                    match audio.get_device_state_by_id(&device_id) {
-                                        Ok(current)
-                                            if (current.volume - saved.volume).abs()
-                                                <= 0.05 =>
-                                        {
-                                            tracing::info!(
-                                                device_id,
-                                                was_muted = saved.was_muted,
-                                                volume = saved.volume,
-                                                "restored audio state"
-                                            );
-                                            true
+                                    if attempt < 2 {
+                                        sleep(Duration::from_millis(800)).await;
+                                        match audio.get_device_state_by_id(&device_id) {
+                                            Ok(current)
+                                                if (current.volume - saved.volume).abs()
+                                                    <= 0.05 =>
+                                            {
+                                                restored = true;
+                                                break;
+                                            }
+                                            Ok(current) => {
+                                                tracing::warn!(
+                                                    expected = saved.volume,
+                                                    actual = current.volume,
+                                                    attempt,
+                                                    "volume overridden, retrying"
+                                                );
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!(
+                                                    error = %e,
+                                                    attempt,
+                                                    "verify failed, retrying"
+                                                );
+                                            }
                                         }
-                                        Ok(current) => {
-                                            tracing::warn!(
-                                                expected = saved.volume,
-                                                actual = current.volume,
-                                                "volume mismatch after restore"
-                                            );
-                                            false
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                error = %e,
-                                                "failed to verify restored volume"
-                                            );
-                                            false
-                                        }
+                                    } else {
+                                        restored = true;
                                     }
                                 }
                                 Err(e) => {
                                     tracing::error!(
                                         error = %e,
+                                        attempt,
                                         "failed to restore audio state"
                                     );
-                                    false
+                                    break;
                                 }
-                            };
-
-                        if !restored {
-                            // 回退：使用当前系统音量
-                            if let Ok(sys) = audio.get_state() {
-                                tracing::info!(
-                                    device_id,
-                                    volume = sys.volume,
-                                    muted = sys.was_muted,
-                                    "falling back to current system volume"
-                                );
-                                let _ = audio.restore_device_state_by_id(&device_id, sys);
                             }
+                        }
+
+                        if restored {
+                            tracing::info!(
+                                device_id,
+                                was_muted = saved.was_muted,
+                                volume = saved.volume,
+                                "restored audio state"
+                            );
+                        } else {
+                            tracing::warn!(device_id, volume = saved.volume, "all restore attempts failed");
                         }
 
                         crate::notifications::show(
